@@ -71,7 +71,7 @@ class TestEventBusCore:
 	async def test_event_emission_and_collection(self, event_bus, event_collector):
 		"""Test basic event emission and collection"""
 		# Subscribe collector
-		event_bus.subscribe_to_all(event_collector)
+		event_bus.on('*', event_collector)
 
 		# Emit various events
 		events = [
@@ -126,11 +126,11 @@ class TestEventBusCore:
 			return {'all_handled': True}
 
 		# Subscribe to specific event types
-		event_bus.subscribe('SessionStartedEvent', session_handler)
-		event_bus.subscribe('SessionStoppedEvent', session_handler)
-		event_bus.subscribe('TaskStartedEvent', task_handler)
-		event_bus.subscribe('TaskCompletedEvent', task_handler)
-		event_bus.subscribe_to_all(all_handler)
+		event_bus.on('SessionStartedEvent', session_handler)
+		event_bus.on('SessionStoppedEvent', session_handler)
+		event_bus.on('TaskStartedEvent', task_handler)
+		event_bus.on('TaskCompletedEvent', task_handler)
+		event_bus.on('*', all_handler)
 
 		# Emit events
 		session_start = SessionStartedEvent(session_id='s1', user_id='u1')
@@ -257,7 +257,7 @@ class TestEventBusCore:
 			results.append(event.event_type)
 			return {'processed': True, 'duration': 0.1}
 
-		event_bus.subscribe_to_all(slow_handler)
+		event_bus.on('*', slow_handler)
 
 		# Emit event without waiting
 		event = TaskStartedEvent(session_id='s1', task_description='Test')
@@ -286,8 +286,8 @@ class TestEventBusCore:
 			success_count += 1
 			return {'success': True}
 
-		event_bus.subscribe_to_all(failing_handler)
-		event_bus.subscribe_to_all(success_handler)
+		event_bus.on('*', failing_handler)
+		event_bus.on('*', success_handler)
 
 		# Emit event and wait
 		event = ErrorTrackedEvent(error_type='TestError', error_message='Test')
@@ -312,7 +312,7 @@ class TestEventBusCore:
 				processed_order.append(event.data.get('order', -1))
 			return {'processed': True}
 
-		event_bus.subscribe_to_all(order_handler)
+		event_bus.on('*', order_handler)
 
 		# Emit events with order markers
 		for i in range(10):
@@ -335,7 +335,7 @@ class TestEventBusCore:
 			processed_count += 1
 			return {'counted': True}
 
-		event_bus.subscribe_to_all(counter_handler)
+		event_bus.on('*', counter_handler)
 
 		# Measure time
 		start_time = time.time()
@@ -484,7 +484,7 @@ class TestCloudEvents:
 
 		# Subscribe handler to specific events
 		for event_type in ['SessionStartedEvent', 'TaskStartedEvent', 'StepExecutedEvent']:
-			event_bus.subscribe(event_type, cloud_sync_handler)
+			event_bus.on(event_type, cloud_sync_handler)
 
 		# Simulate a workflow
 		session_event = SessionStartedEvent(session_id='s123', user_id='u456')

@@ -195,7 +195,7 @@ class TestHandlerRegistration:
 			return f'Processed {event.data["action"]}'
 
 		# Subscribe handler
-		event_bus.subscribe('UserActionEvent', user_action_handler)
+		event_bus.on('UserActionEvent', user_action_handler)
 
 		# Emit event
 		event = UserActionEvent(action='login', user_id='user123')
@@ -216,7 +216,7 @@ class TestHandlerRegistration:
 			return 'handled'
 
 		# Subscribe using model
-		event_bus.subscribe_by_model(SystemEventModel, system_handler)
+		event_bus.on(SystemEventModel, system_handler)
 
 		# Emit event
 		event = SystemEventModel(event_name='config_loaded')
@@ -237,7 +237,7 @@ class TestHandlerRegistration:
 			return 'universal'
 
 		# Subscribe to all
-		event_bus.subscribe_to_all(universal_handler)
+		event_bus.on('*', universal_handler)
 
 		# Emit different event types
 		await event_bus.enqueue(UserActionEvent(action='login', user_id='u1'))
@@ -268,8 +268,8 @@ class TestHandlerRegistration:
 			return 'handler2'
 
 		# Subscribe both handlers
-		event_bus.subscribe('UserActionEvent', slow_handler_1)
-		event_bus.subscribe('UserActionEvent', slow_handler_2)
+		event_bus.on('UserActionEvent', slow_handler_1)
+		event_bus.on('UserActionEvent', slow_handler_2)
 
 		# Emit event and wait
 		start = time.time()
@@ -294,7 +294,7 @@ class TestHandlerRegistration:
 
 		# Should raise ValueError
 		with pytest.raises(ValueError, match='Handler must be an async function'):
-			bus.subscribe('TestEvent', sync_handler)
+			bus.on('TestEvent', sync_handler)
 
 
 class TestFIFOOrdering:
@@ -312,7 +312,7 @@ class TestFIFOOrdering:
 			processed_order.append(order)
 			return order
 
-		event_bus.subscribe_to_all(order_handler)
+		event_bus.on('*', order_handler)
 
 		# Enqueue multiple events rapidly
 		events = []
@@ -337,7 +337,7 @@ class TestErrorHandling:
 		async def failing_handler(event: Event, agent: Any) -> str:
 			raise ValueError('Handler failed!')
 
-		event_bus.subscribe('UserActionEvent', failing_handler)
+		event_bus.on('UserActionEvent', failing_handler)
 
 		# Emit event
 		event = await event_bus.enqueue_and_wait(UserActionEvent(action='fail', user_id='u1'))
@@ -359,8 +359,8 @@ class TestErrorHandling:
 			results.append('I work!')
 			return 'success'
 
-		event_bus.subscribe('UserActionEvent', failing_handler)
-		event_bus.subscribe('UserActionEvent', working_handler)
+		event_bus.on('UserActionEvent', failing_handler)
+		event_bus.on('UserActionEvent', working_handler)
 
 		# Emit event
 		event = await event_bus.enqueue_and_wait(UserActionEvent(action='test', user_id='u1'))
@@ -499,7 +499,7 @@ class TestSerialization:
 		async def failing_handler(event: Event, agent: Any) -> str:
 			raise ValueError('Test error')
 
-		event_bus.subscribe('UserActionEvent', failing_handler)
+		event_bus.on('UserActionEvent', failing_handler)
 
 		# Create event that will have error
 		await event_bus.enqueue_and_wait(UserActionEvent(action='fail', user_id='u1'))
@@ -532,7 +532,7 @@ class TestEventCompletion:
 			completion_order.append('handler_done')
 			return 'done'
 
-		event_bus.subscribe('UserActionEvent', slow_handler)
+		event_bus.on('UserActionEvent', slow_handler)
 
 		# Enqueue without waiting
 		event = await event_bus.enqueue(UserActionEvent(action='test', user_id='u1'))
@@ -580,7 +580,7 @@ class TestEdgeCases:
 			await asyncio.sleep(1)
 			return 'done'
 
-		bus.subscribe_to_all(slow_handler)
+		bus.on('*', slow_handler)
 
 		# Enqueue events but don't wait
 		for i in range(5):

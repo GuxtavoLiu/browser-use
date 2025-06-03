@@ -163,7 +163,7 @@ class TestEventBusSystem:
 			agent = Agent(task='Test task', llm=mock_llm, browser=browser_session)
 
 		# Subscribe collector to all events BEFORE the event bus starts
-		agent.event_bus.subscribe_to_all(event_collector)
+		agent.event_bus.on('*', event_collector)
 
 		# Patch emit to capture events (workaround for sync emit in async context)
 		original_emit = agent.event_bus.emit

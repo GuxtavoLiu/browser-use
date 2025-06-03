@@ -91,8 +91,8 @@ class TestAgentEventBusIntegration:
 			session_events.append(event)
 			return 'handled'
 
-		agent.event_bus.subscribe('SessionStartedEvent', session_handler)
-		agent.event_bus.subscribe('SessionStoppedEvent', session_handler)
+		agent.event_bus.on('SessionStartedEvent', session_handler)
+		agent.event_bus.on('SessionStoppedEvent', session_handler)
 
 		# Mock the agent methods to avoid real browser operations
 		with (
@@ -126,8 +126,8 @@ class TestAgentEventBusIntegration:
 			task_events.append(event)
 			return 'handled'
 
-		agent.event_bus.subscribe('TaskStartedEvent', task_handler)
-		agent.event_bus.subscribe('TaskCompletedEvent', task_handler)
+		agent.event_bus.on('TaskStartedEvent', task_handler)
+		agent.event_bus.on('TaskCompletedEvent', task_handler)
 
 		# Mock the agent methods
 		with (
@@ -164,7 +164,7 @@ class TestAgentEventBusIntegration:
 			step_events.append(event)
 			return 'handled'
 
-		agent.event_bus.subscribe('StepCreatedEvent', step_handler)
+		agent.event_bus.on('StepCreatedEvent', step_handler)
 
 		# Create mock browser state and model output
 		mock_browser_state = MagicMock()
@@ -213,8 +213,8 @@ class TestAgentEventBusIntegration:
 			control_events.append(event.event_type)
 			return 'handled'
 
-		agent.event_bus.subscribe('TaskPausedEvent', control_handler)
-		agent.event_bus.subscribe('TaskResumedEvent', control_handler)
+		agent.event_bus.on('TaskPausedEvent', control_handler)
+		agent.event_bus.on('TaskResumedEvent', control_handler)
 
 		# Start event bus
 		await agent.event_bus.start()
@@ -294,7 +294,7 @@ class TestCloudEventIntegration:
 			return {'synced': False}
 
 		# Subscribe cloud handler
-		agent.event_bus.subscribe('SessionStartedEvent', cloud_sync_handler)
+		agent.event_bus.on('SessionStartedEvent', cloud_sync_handler)
 
 		# Start event bus
 		await agent.event_bus.start()
@@ -330,7 +330,7 @@ class TestCloudEventIntegration:
 			await asyncio.sleep(0.1)
 			return {'synced': True, 'duration_ms': 100}
 
-		agent.event_bus.subscribe('TaskCompletedEvent', slow_cloud_sync)
+		agent.event_bus.on('TaskCompletedEvent', slow_cloud_sync)
 
 		# Start event bus
 		await agent.event_bus.start()
@@ -373,7 +373,7 @@ class TestEventBusLifecycle:
 			all_events.append(event.event_type)
 			return 'collected'
 
-		agent.event_bus.subscribe_to_all(collect_events)
+		agent.event_bus.on('*', collect_events)
 
 		# Mock methods
 		with (

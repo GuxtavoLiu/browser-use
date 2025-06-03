@@ -60,7 +60,7 @@ class TestHighVolumeProcessing:
 			processed.append(event.data['event_id'])
 			return event.data['event_id']
 
-		stress_event_bus.subscribe('StressTestEvent', counter_handler)
+		stress_event_bus.on('StressTestEvent', counter_handler)
 
 		# Measure time
 		start_time = time.time()
@@ -100,7 +100,7 @@ class TestHighVolumeProcessing:
 			processed_by_producer[producer_id].append(event_id)
 			return f'p{producer_id}_e{event_id}'
 
-		stress_event_bus.subscribe('StressTestEvent', tracking_handler)
+		stress_event_bus.on('StressTestEvent', tracking_handler)
 
 		# Create producer tasks
 		async def producer(producer_id: int):
@@ -169,7 +169,7 @@ class TestMemoryUsage:
 			weak_refs.append(weakref.ref(event))
 			return 'tracked'
 
-		stress_event_bus.subscribe('StressTestEvent', tracking_handler)
+		stress_event_bus.on('StressTestEvent', tracking_handler)
 
 		# Process events
 		events = []
@@ -211,7 +211,7 @@ class TestLargePayloads:
 			processed = True
 			return 'processed_large'
 
-		stress_event_bus.subscribe('StressTestEvent', large_handler)
+		stress_event_bus.on('StressTestEvent', large_handler)
 
 		# Send large event
 		event = StressTestEvent(event_id=1, payload='Large event', metadata=large_data)
@@ -239,7 +239,7 @@ class TestLargePayloads:
 
 			handler = await make_handler(i)
 			handler.__name__ = f'handler_{i}'
-			stress_event_bus.subscribe('StressTestEvent', handler)
+			stress_event_bus.on('StressTestEvent', handler)
 
 		# Process event
 		event = await stress_event_bus.enqueue_and_wait(StressTestEvent(event_id=1, payload='Many handlers'))
@@ -265,7 +265,7 @@ class TestLongRunningHandlers:
 			process_times.append((event_id, time.time()))
 			return f'processed_{event_id}'
 
-		stress_event_bus.subscribe('StressTestEvent', slow_handler)
+		stress_event_bus.on('StressTestEvent', slow_handler)
 
 		# Send multiple events
 		start_time = time.time()
@@ -300,7 +300,7 @@ class TestLongRunningHandlers:
 				raise
 			return 'should_not_reach'
 
-		stress_event_bus.subscribe('StressTestEvent', timeout_handler)
+		stress_event_bus.on('StressTestEvent', timeout_handler)
 
 		# Process event
 		event = await stress_event_bus.enqueue_and_wait(StressTestEvent(event_id=1, payload='Timeout test'))
@@ -325,7 +325,7 @@ class TestEdgeCasesUnderLoad:
 			await asyncio.sleep(0.1)
 			return 'slow'
 
-		bus.subscribe_to_all(slow_handler)
+		bus.on('*', slow_handler)
 
 		# Queue many events
 		for i in range(100):
@@ -345,7 +345,7 @@ class TestEdgeCasesUnderLoad:
 			handlers_called.add('initial')
 			return 'initial'
 
-		stress_event_bus.subscribe('StressTestEvent', initial_handler)
+		stress_event_bus.on('StressTestEvent', initial_handler)
 
 		# Start processing events
 		for i in range(10):
@@ -356,7 +356,7 @@ class TestEdgeCasesUnderLoad:
 			handlers_called.add('late')
 			return 'late'
 
-		stress_event_bus.subscribe('StressTestEvent', late_handler)
+		stress_event_bus.on('StressTestEvent', late_handler)
 
 		# Add more events
 		for i in range(10, 20):
@@ -385,7 +385,7 @@ class TestEdgeCasesUnderLoad:
 
 			return f'depth_{depth}'
 
-		stress_event_bus.subscribe('StressTestEvent', recursive_handler)
+		stress_event_bus.on('StressTestEvent', recursive_handler)
 
 		# Start recursion
 		stress_event_bus.emit(StressTestEvent(event_id=0, payload='Start', metadata={'depth': 0}))
