@@ -16,10 +16,10 @@ from langchain_openai import ChatOpenAI
 
 from browser_use import Agent
 from browser_use.event_bus import (
-	CreateAgentSessionEvent,
-	CreateAgentTaskEvent,
-	CreateAgentStepEvent,
 	CreateAgentOutputFileEvent,
+	CreateAgentSessionEvent,
+	CreateAgentStepEvent,
+	CreateAgentTaskEvent,
 )
 
 
@@ -88,7 +88,7 @@ async def main():
 		if event.event_type == 'CreateAgentStep':
 			print(f'\n🔍 Step {event.step} created at URL: {event.url}')
 		return 'handled'
-	
+
 	agent.event_bus.on('CreateAgentStep', on_step_created)
 
 	try:

@@ -1,15 +1,15 @@
 """Event bus for the browser-use agent."""
 
 from browser_use.event_bus.cloud_events import (
-	BaseEvent,
-	CreateAgentSessionEvent,
-	CreateAgentTaskEvent,
-	CreateAgentStepEvent,
-	CreateUserUploadedFileEvent,
-	CreateAgentOutputFileEvent,
-	CreateUserBrowserProfileEvent,
-	EventType,
 	EVENT_TYPE_MAP,
+	BaseEvent,
+	CreateAgentOutputFileEvent,
+	CreateAgentSessionEvent,
+	CreateAgentStepEvent,
+	CreateAgentTaskEvent,
+	CreateUserBrowserProfileEvent,
+	CreateUserUploadedFileEvent,
+	EventType,
 )
 from browser_use.event_bus.service import EventBus
 

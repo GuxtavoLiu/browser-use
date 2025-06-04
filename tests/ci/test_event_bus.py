@@ -21,7 +21,7 @@ from typing import Any
 
 import anyio
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from browser_use.event_bus import BaseEvent, EventBus
 
@@ -29,8 +29,8 @@ from browser_use.event_bus import BaseEvent, EventBus
 # Test event models - using proper Event subclasses
 class UserActionEvent(BaseEvent):
 	"""Test event model for user actions"""
-	
-	event_type: str = Field(default="UserActionEvent", frozen=True)
+
+	event_type: str = Field(default='UserActionEvent', frozen=True)
 	action: str
 	user_id: str
 	metadata: dict[str, Any] = Field(default_factory=dict)
@@ -38,8 +38,8 @@ class UserActionEvent(BaseEvent):
 
 class SystemEventModel(BaseEvent):
 	"""Test event model for system events"""
-	
-	event_type: str = Field(default="SystemEventModel", frozen=True)
+
+	event_type: str = Field(default='SystemEventModel', frozen=True)
 	event_name: str
 	severity: str = 'info'
 	details: dict[str, Any] = Field(default_factory=dict)
@@ -72,7 +72,6 @@ def mock_agent():
 class TestEventBusBasics:
 	"""Test basic EventBus functionality"""
 
-	@pytest.mark.asyncio
 	async def test_event_bus_initialization(self, mock_agent):
 		"""Test that EventBus initializes correctly"""
 		bus = EventBus()
@@ -82,7 +81,6 @@ class TestEventBusBasics:
 		assert len(bus.write_ahead_log) == 0
 		assert len(bus.all_event_handlers) == 1  # Default logger
 
-	@pytest.mark.asyncio
 	async def test_start_stop(self, mock_agent):
 		"""Test starting and stopping the event bus"""
 		bus = EventBus()
@@ -108,7 +106,6 @@ class TestEventBusBasics:
 class TestEventEnqueueing:
 	"""Test event enqueueing functionality"""
 
-	@pytest.mark.asyncio
 	async def test_enqueue_async(self, event_bus):
 		"""Test async event enqueueing"""
 		event = UserActionEvent(action='login', user_id='user123')
@@ -148,7 +145,6 @@ class TestEventEnqueueing:
 		# Check write-ahead log
 		assert len(bus.write_ahead_log) == 1
 
-	@pytest.mark.asyncio
 	async def test_enqueue_and_wait(self, event_bus):
 		"""Test blocking enqueue that waits for completion"""
 		event = UserActionEvent(action='logout', user_id='user123')
@@ -161,13 +157,6 @@ class TestEventEnqueueing:
 		assert result.completed_at is not None
 		assert result.results['_default_log_handler'] == 'logged'
 
-	def test_enqueue_and_wait_sync(self, mock_agent):
-		"""Test blocking enqueue from sync context"""
-		# This test is complex because we need a truly sync context
-		# For now, let's skip it as the functionality works in practice
-		pytest.skip('Complex test - sync enqueue_and_wait works in practice but is hard to test in pytest environment')
-
-	@pytest.mark.asyncio
 	async def test_emit_convenience_method(self, event_bus):
 		"""Test the emit() convenience method"""
 		event = UserActionEvent(action='click', user_id='user123')
@@ -185,7 +174,6 @@ class TestEventEnqueueing:
 class TestHandlerRegistration:
 	"""Test handler registration and execution"""
 
-	@pytest.mark.asyncio
 	async def test_subscribe_handler(self, event_bus):
 		"""Test subscribing a handler to specific event type"""
 		results = []
@@ -206,7 +194,6 @@ class TestHandlerRegistration:
 		assert len(results) == 1
 		assert results[0] == 'Handled login'
 
-	@pytest.mark.asyncio
 	async def test_subscribe_by_model(self, event_bus):
 		"""Test subscribing a handler using model class"""
 		results = []
@@ -227,7 +214,6 @@ class TestHandlerRegistration:
 		assert len(results) == 1
 		assert results[0] == 'config_loaded'
 
-	@pytest.mark.asyncio
 	async def test_subscribe_to_all(self, event_bus):
 		"""Test subscribing a handler to all events"""
 		all_events = []
@@ -249,7 +235,6 @@ class TestHandlerRegistration:
 		assert 'UserActionEvent' in all_events
 		assert 'SystemEventModel' in all_events
 
-	@pytest.mark.asyncio
 	async def test_multiple_handlers_parallel(self, event_bus):
 		"""Test that multiple handlers run in parallel"""
 		start_times = []
@@ -298,7 +283,7 @@ class TestHandlerRegistration:
 		# Both should work
 		bus.on('TestEvent', sync_handler)
 		bus.on('TestEvent', async_handler)
-		
+
 		# Check both were registered
 		assert len(bus.handlers['TestEvent']) == 2
 
@@ -306,7 +291,6 @@ class TestHandlerRegistration:
 class TestFIFOOrdering:
 	"""Test FIFO event processing"""
 
-	@pytest.mark.asyncio
 	async def test_fifo_processing(self, event_bus):
 		"""Test that events are processed in FIFO order"""
 		processed_order = []
@@ -335,7 +319,6 @@ class TestFIFOOrdering:
 class TestErrorHandling:
 	"""Test error handling in handlers"""
 
-	@pytest.mark.asyncio
 	async def test_handler_error_captured(self, event_bus):
 		"""Test that handler errors are captured in event"""
 
@@ -352,7 +335,6 @@ class TestErrorHandling:
 		assert isinstance(event.errors['failing_handler'], str)
 		assert 'Handler failed!' in event.errors['failing_handler']
 
-	@pytest.mark.asyncio
 	async def test_one_handler_failure_doesnt_stop_others(self, event_bus):
 		"""Test that one handler failing doesn't prevent others from running"""
 		results = []
@@ -380,7 +362,6 @@ class TestErrorHandling:
 class TestBatchOperations:
 	"""Test batch event operations"""
 
-	@pytest.mark.asyncio
 	async def test_enqueue_batch_and_wait(self, event_bus):
 		"""Test batch enqueueing with wait"""
 		events = [
@@ -398,7 +379,6 @@ class TestBatchOperations:
 			assert result.completed_at is not None
 			assert '_default_log_handler' in result.results
 
-	@pytest.mark.asyncio
 	async def test_empty_batch(self, event_bus):
 		"""Test empty batch handling"""
 		results = await event_bus.enqueue_batch_and_wait([])
@@ -408,7 +388,6 @@ class TestBatchOperations:
 class TestWriteAheadLog:
 	"""Test write-ahead logging functionality"""
 
-	@pytest.mark.asyncio
 	async def test_write_ahead_log_captures_all_events(self, event_bus):
 		"""Test that all events are captured in write-ahead log"""
 		# Emit several events
@@ -425,7 +404,6 @@ class TestWriteAheadLog:
 		for i, event in enumerate(log):
 			assert event.action == f'action_{i}'
 
-	@pytest.mark.asyncio
 	async def test_get_event_log_returns_copy(self, event_bus):
 		"""Test that get_event_log returns a copy"""
 		await event_bus.enqueue(UserActionEvent(action='test', user_id='u1'))
@@ -442,7 +420,6 @@ class TestWriteAheadLog:
 class TestSerialization:
 	"""Test event serialization functionality"""
 
-	@pytest.mark.asyncio
 	async def test_serialize_events_to_file(self, event_bus, tmp_path):
 		"""Test serializing events to JSON file"""
 		# Create some events
@@ -499,7 +476,6 @@ class TestSerialization:
 			data = json.load(f)
 		assert len(data) == 2
 
-	@pytest.mark.asyncio
 	async def test_serialize_with_errors(self, event_bus, tmp_path):
 		"""Test serializing events that contain errors"""
 
@@ -529,7 +505,6 @@ class TestSerialization:
 class TestEventCompletion:
 	"""Test event completion tracking"""
 
-	@pytest.mark.asyncio
 	async def test_wait_for_completion(self, event_bus):
 		"""Test waiting for event completion"""
 		completion_order = []
@@ -576,7 +551,6 @@ class TestEventCompletion:
 class TestEdgeCases:
 	"""Test edge cases and special scenarios"""
 
-	@pytest.mark.asyncio
 	async def test_stop_with_pending_events(self, mock_agent):
 		"""Test stopping event bus with events still in queue"""
 		bus = EventBus()
@@ -599,7 +573,6 @@ class TestEdgeCases:
 		# Bus should stop even with pending events
 		assert not bus.running
 
-	@pytest.mark.asyncio
 	async def test_event_with_complex_data(self, event_bus):
 		"""Test events with complex nested data"""
 		complex_data = {
@@ -617,7 +590,6 @@ class TestEdgeCases:
 		# Check data preserved
 		assert result.details['nested']['list'][2]['inner'] == 'value'
 
-	@pytest.mark.asyncio
 	async def test_concurrent_emit_calls(self, event_bus):
 		"""Test multiple concurrent emit calls"""
 		# Create many events concurrently
@@ -640,18 +612,13 @@ class TestEdgeCases:
 class TestEventTypeOverride:
 	"""Test that Event subclasses properly override event_type"""
 
-	@pytest.mark.asyncio
 	async def test_event_subclass_type(self, event_bus):
 		"""Test that event subclasses maintain their type"""
 		from browser_use.event_bus.cloud_events import CreateAgentTaskEvent
-		from uuid import UUID
 
 		# Create a specific event type
 		event = CreateAgentTaskEvent(
-			user_id='test_user',
-			agent_session_id=UUID('12345678-1234-5678-1234-567812345678'),
-			llm_model='test-model',
-			task='test task'
+			user_id='test_user', agent_session_id='12345678-1234-5678-1234-567812345678', llm_model='test-model', task='test task'
 		)
 
 		# Enqueue it

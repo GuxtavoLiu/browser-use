@@ -390,7 +390,7 @@ class EventBus:
 			# Get the actual event class/type
 			if isinstance(event_type, str):
 				# String event type - will create generic Event
-				raise ValueError("String event types are no longer supported")
+				raise ValueError('String event types are no longer supported')
 				type_name = event_type
 			else:
 				# Event subclass
@@ -445,7 +445,7 @@ class EventBus:
 		def decorator(func):
 			# Get the actual event class/type
 			if isinstance(event_type, str):
-				raise ValueError("String event types are no longer supported")
+				raise ValueError('String event types are no longer supported')
 				type_name = event_type
 			else:
 				event_class = event_type
@@ -513,7 +513,7 @@ class EventBus:
 		def decorator(func):
 			# Get the actual event class/type
 			if isinstance(event_type, str):
-				raise ValueError("String event types are no longer supported")
+				raise ValueError('String event types are no longer supported')
 				type_name = event_type
 			else:
 				event_class = event_type

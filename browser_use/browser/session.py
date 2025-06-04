@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Self
 from urllib.parse import urlparse
 
+from uuid_extensions import uuid7str
+
 os.environ['PW_TEST_SCREENSHOT_NO_FONTS_READY'] = '1'  # https://github.com/microsoft/playwright/issues/35972
 
 import psutil
@@ -157,6 +159,9 @@ class BrowserSession(BaseModel):
 	)
 	# this class accepts arbitrary extra **kwargs in init because of the extra='allow' pydantic option
 	# they are saved on the model, then applied to self.browser_profile via .apply_session_overrides_to_profile()
+
+	# Persistent ID for this browser session
+	id: str = Field(default_factory=uuid7str)
 
 	# template profile for the BrowserSession, will be copied at init/validation time, and overrides applied to the copy
 	browser_profile: InstanceOf[BrowserProfile] = Field(
