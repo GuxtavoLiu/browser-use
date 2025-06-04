@@ -23,22 +23,23 @@ import anyio
 import pytest
 from pydantic import BaseModel, Field
 
-from browser_use.event_bus import Event, EventBus
+from browser_use.event_bus import BaseEvent, EventBus
 
 
-# Test event models
-class UserActionEvent(BaseModel):
+# Test event models - using proper Event subclasses
+class UserActionEvent(BaseEvent):
 	"""Test event model for user actions"""
-
+	
+	event_type: str = Field(default="UserActionEvent", frozen=True)
 	action: str
 	user_id: str
-	timestamp: datetime = Field(default_factory=datetime.utcnow)
 	metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class SystemEventModel(BaseModel):
+class SystemEventModel(BaseEvent):
 	"""Test event model for system events"""
-
+	
+	event_type: str = Field(default="SystemEventModel", frozen=True)
 	event_name: str
 	severity: str = 'info'
 	details: dict[str, Any] = Field(default_factory=dict)
@@ -56,7 +57,7 @@ class MockAgent:
 async def event_bus():
 	"""Create and start an event bus for testing"""
 	agent = MockAgent()
-	bus = EventBus(agent)
+	bus = EventBus()
 	await bus.start()
 	yield bus
 	await bus.stop()
@@ -74,9 +75,8 @@ class TestEventBusBasics:
 	@pytest.mark.asyncio
 	async def test_event_bus_initialization(self, mock_agent):
 		"""Test that EventBus initializes correctly"""
-		bus = EventBus(mock_agent)
+		bus = EventBus()
 
-		assert bus.agent == mock_agent
 		assert bus.running is False
 		assert bus.runner_task is None
 		assert len(bus.write_ahead_log) == 0
@@ -85,7 +85,7 @@ class TestEventBusBasics:
 	@pytest.mark.asyncio
 	async def test_start_stop(self, mock_agent):
 		"""Test starting and stopping the event bus"""
-		bus = EventBus(mock_agent)
+		bus = EventBus()
 
 		# Start the bus
 		await bus.start()
@@ -117,12 +117,12 @@ class TestEventEnqueueing:
 		result = await event_bus.enqueue(event)
 
 		# Check result
-		assert isinstance(result, Event)
+		assert isinstance(result, UserActionEvent)
 		assert result.event_type == 'UserActionEvent'
-		assert result.data['action'] == 'login'
-		assert result.data['user_id'] == 'user123'
+		assert result.action == 'login'
+		assert result.user_id == 'user123'
 		assert result.event_id is not None
-		assert result.timestamp is not None
+		assert result.event_at is not None
 
 		# Wait for processing
 		await event_bus.wait_for_empty_queue()
@@ -133,17 +133,17 @@ class TestEventEnqueueing:
 
 	def test_enqueue_sync(self, mock_agent):
 		"""Test sync event enqueueing"""
-		bus = EventBus(mock_agent)
+		bus = EventBus()
 		event = SystemEventModel(event_name='startup', severity='info')
 
 		# Enqueue event from sync context
 		result = bus.enqueue_sync(event)
 
 		# Check result
-		assert isinstance(result, Event)
+		assert isinstance(result, SystemEventModel)
 		assert result.event_type == 'SystemEventModel'
-		assert result.data['event_name'] == 'startup'
-		assert result.data['severity'] == 'info'
+		assert result.event_name == 'startup'
+		assert result.severity == 'info'
 
 		# Check write-ahead log
 		assert len(bus.write_ahead_log) == 1
@@ -175,7 +175,7 @@ class TestEventEnqueueing:
 		# Use emit() method
 		result = event_bus.emit(event)
 
-		assert isinstance(result, Event)
+		assert isinstance(result, BaseEvent)
 		assert result.event_type == 'UserActionEvent'
 
 		# Wait for processing
@@ -190,9 +190,9 @@ class TestHandlerRegistration:
 		"""Test subscribing a handler to specific event type"""
 		results = []
 
-		async def user_action_handler(event: Event, agent: Any) -> str:
-			results.append(f'Handled {event.data["action"]}')
-			return f'Processed {event.data["action"]}'
+		async def user_action_handler(event: UserActionEvent) -> str:
+			results.append(f'Handled {event.action}')
+			return f'Processed {event.action}'
 
 		# Subscribe handler
 		event_bus.on('UserActionEvent', user_action_handler)
@@ -211,8 +211,8 @@ class TestHandlerRegistration:
 		"""Test subscribing a handler using model class"""
 		results = []
 
-		async def system_handler(event: Event, agent: Any) -> str:
-			results.append(event.data['event_name'])
+		async def system_handler(event: SystemEventModel) -> str:
+			results.append(event.event_name)
 			return 'handled'
 
 		# Subscribe using model
@@ -232,7 +232,7 @@ class TestHandlerRegistration:
 		"""Test subscribing a handler to all events"""
 		all_events = []
 
-		async def universal_handler(event: Event, agent: Any) -> str:
+		async def universal_handler(event: BaseEvent) -> str:
 			all_events.append(event.event_type)
 			return 'universal'
 
@@ -255,13 +255,13 @@ class TestHandlerRegistration:
 		start_times = []
 		end_times = []
 
-		async def slow_handler_1(event: Event, agent: Any) -> str:
+		async def slow_handler_1(event: BaseEvent) -> str:
 			start_times.append(('h1', time.time()))
 			await asyncio.sleep(0.1)
 			end_times.append(('h1', time.time()))
 			return 'handler1'
 
-		async def slow_handler_2(event: Event, agent: Any) -> str:
+		async def slow_handler_2(event: BaseEvent) -> str:
 			start_times.append(('h2', time.time()))
 			await asyncio.sleep(0.1)
 			end_times.append(('h2', time.time()))
@@ -285,16 +285,22 @@ class TestHandlerRegistration:
 		assert event.results['slow_handler_1'] == 'handler1'
 		assert event.results['slow_handler_2'] == 'handler2'
 
-	def test_handler_must_be_async(self, mock_agent):
-		"""Test that sync handlers are rejected"""
-		bus = EventBus(mock_agent)
+	def test_handler_can_be_sync_or_async(self, mock_agent):
+		"""Test that both sync and async handlers are accepted"""
+		bus = EventBus()
 
-		def sync_handler(event: Event, agent: Any) -> str:
+		def sync_handler(event: BaseEvent) -> str:
 			return 'sync'
 
-		# Should raise ValueError
-		with pytest.raises(ValueError, match='Handler must be an async function'):
-			bus.on('TestEvent', sync_handler)
+		async def async_handler(event: BaseEvent) -> str:
+			return 'async'
+
+		# Both should work
+		bus.on('TestEvent', sync_handler)
+		bus.on('TestEvent', async_handler)
+		
+		# Check both were registered
+		assert len(bus.handlers['TestEvent']) == 2
 
 
 class TestFIFOOrdering:
@@ -305,10 +311,9 @@ class TestFIFOOrdering:
 		"""Test that events are processed in FIFO order"""
 		processed_order = []
 
-		async def order_handler(event: Event, agent: Any) -> int:
-			# Extract order from the metadata inside data
-			metadata = event.data.get('metadata', {})
-			order = metadata.get('order', 0)
+		async def order_handler(event: UserActionEvent) -> int:
+			# Extract order from the metadata
+			order = event.metadata.get('order', 0)
 			processed_order.append(order)
 			return order
 
@@ -334,7 +339,7 @@ class TestErrorHandling:
 	async def test_handler_error_captured(self, event_bus):
 		"""Test that handler errors are captured in event"""
 
-		async def failing_handler(event: Event, agent: Any) -> str:
+		async def failing_handler(event: BaseEvent) -> str:
 			raise ValueError('Handler failed!')
 
 		event_bus.on('UserActionEvent', failing_handler)
@@ -344,18 +349,18 @@ class TestErrorHandling:
 
 		# Check error was captured
 		assert 'failing_handler' in event.errors
-		assert isinstance(event.errors['failing_handler'], ValueError)
-		assert str(event.errors['failing_handler']) == 'Handler failed!'
+		assert isinstance(event.errors['failing_handler'], str)
+		assert 'Handler failed!' in event.errors['failing_handler']
 
 	@pytest.mark.asyncio
 	async def test_one_handler_failure_doesnt_stop_others(self, event_bus):
 		"""Test that one handler failing doesn't prevent others from running"""
 		results = []
 
-		async def failing_handler(event: Event, agent: Any) -> str:
+		async def failing_handler(event: BaseEvent) -> str:
 			raise RuntimeError('I fail!')
 
-		async def working_handler(event: Event, agent: Any) -> str:
+		async def working_handler(event: BaseEvent) -> str:
 			results.append('I work!')
 			return 'success'
 
@@ -418,7 +423,7 @@ class TestWriteAheadLog:
 		log = event_bus.get_event_log()
 		assert len(log) == 5
 		for i, event in enumerate(log):
-			assert event.data['action'] == f'action_{i}'
+			assert event.action == f'action_{i}'
 
 	@pytest.mark.asyncio
 	async def test_get_event_log_returns_copy(self, event_bus):
@@ -464,19 +469,21 @@ class TestSerialization:
 
 		assert len(data) == 3
 		assert data[0]['event_type'] == 'UserActionEvent'
-		assert data[0]['data']['action'] == 'login'
+		assert data[0]['action'] == 'login'
 		assert data[1]['event_type'] == 'SystemEventModel'
+		assert data[1]['event_name'] == 'startup'
 		assert data[2]['event_type'] == 'UserActionEvent'
+		assert data[2]['action'] == 'logout'
 
 		# Check timestamps are ISO format
 		for event in data:
-			assert isinstance(event['timestamp'], str)
+			assert isinstance(event['event_at'], str)
 			# Should be able to parse back
-			datetime.fromisoformat(event['timestamp'])
+			datetime.fromisoformat(event['event_at'])
 
 	def test_serialize_events_to_file_sync(self, mock_agent, tmp_path):
 		"""Test sync serialization"""
-		bus = EventBus(mock_agent)
+		bus = EventBus()
 
 		# Add some events
 		bus.enqueue_sync(UserActionEvent(action='test', user_id='u1'))
@@ -496,7 +503,7 @@ class TestSerialization:
 	async def test_serialize_with_errors(self, event_bus, tmp_path):
 		"""Test serializing events that contain errors"""
 
-		async def failing_handler(event: Event, agent: Any) -> str:
+		async def failing_handler(event: BaseEvent) -> str:
 			raise ValueError('Test error')
 
 		event_bus.on('UserActionEvent', failing_handler)
@@ -527,7 +534,7 @@ class TestEventCompletion:
 		"""Test waiting for event completion"""
 		completion_order = []
 
-		async def slow_handler(event: Event, agent: Any) -> str:
+		async def slow_handler(event: BaseEvent) -> str:
 			await asyncio.sleep(0.1)
 			completion_order.append('handler_done')
 			return 'done'
@@ -555,8 +562,8 @@ class TestEventCompletion:
 
 		def sync_test():
 			# Create event outside async context
-			event = Event(event_type='test')
-			result['has_completion_event'] = event.completion_event is not None
+			event = UserActionEvent(action='test', user_id='u1')
+			result['has_completion_event'] = event._completion_event is not None
 
 		thread = threading.Thread(target=sync_test)
 		thread.start()
@@ -572,11 +579,11 @@ class TestEdgeCases:
 	@pytest.mark.asyncio
 	async def test_stop_with_pending_events(self, mock_agent):
 		"""Test stopping event bus with events still in queue"""
-		bus = EventBus(mock_agent)
+		bus = EventBus()
 		await bus.start()
 
 		# Add a slow handler
-		async def slow_handler(event: Event, agent: Any) -> str:
+		async def slow_handler(event: BaseEvent) -> str:
 			await asyncio.sleep(1)
 			return 'done'
 
@@ -608,7 +615,7 @@ class TestEdgeCases:
 		result = await event_bus.enqueue_and_wait(event)
 
 		# Check data preserved
-		assert result.data['details']['nested']['list'][2]['inner'] == 'value'
+		assert result.details['nested']['list'][2]['inner'] == 'value'
 
 	@pytest.mark.asyncio
 	async def test_concurrent_emit_calls(self, event_bus):
@@ -636,17 +643,23 @@ class TestEventTypeOverride:
 	@pytest.mark.asyncio
 	async def test_event_subclass_type(self, event_bus):
 		"""Test that event subclasses maintain their type"""
-		from browser_use.event_bus.cloud_events import TaskStartedEvent
+		from browser_use.event_bus.cloud_events import CreateAgentTaskEvent
+		from uuid import UUID
 
 		# Create a specific event type
-		event = TaskStartedEvent(session_id='test_session', task_description='test task')
+		event = CreateAgentTaskEvent(
+			user_id='test_user',
+			agent_session_id=UUID('12345678-1234-5678-1234-567812345678'),
+			llm_model='test-model',
+			task='test task'
+		)
 
 		# Enqueue it
 		result = await event_bus.enqueue(event)
 
 		# Check type is preserved - should be class name
-		assert result.event_type == 'TaskStartedEvent'
-		assert isinstance(result, Event)
+		assert result.event_type == 'CreateAgentTask'
+		assert isinstance(result, BaseEvent)
 
 
 if __name__ == '__main__':

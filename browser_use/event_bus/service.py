@@ -11,12 +11,12 @@ from typing import Any, Union
 import anyio
 from pydantic import BaseModel
 
-from browser_use.event_bus.views import Event
+from browser_use.event_bus.cloud_events import BaseEvent
 
 logger = logging.getLogger(__name__)
 
 # Type alias for event handlers
-EventHandler = Union[Callable[[Event], Any], Callable[[Event], Awaitable[Any]]]
+EventHandler = Union[Callable[[BaseEvent], Any], Callable[[BaseEvent], Awaitable[Any]]]
 
 
 class EventBus:
@@ -34,8 +34,8 @@ class EventBus:
 
 	def __init__(self, name: str | None = None):
 		self.name = name or f'EventBus_{hex(id(self))[-6:]}'
-		self.event_queue: asyncio.Queue[Event] = asyncio.Queue()
-		self.write_ahead_log: list[Event] = []
+		self.event_queue: asyncio.Queue[BaseEvent] = asyncio.Queue()
+		self.write_ahead_log: list[BaseEvent] = []
 		self.handlers: dict[str, list[EventHandler]] = defaultdict(list)
 		self.all_event_handlers: list[EventHandler] = []
 		self.running = False
@@ -45,7 +45,8 @@ class EventBus:
 		# Register default logger handler
 		self.on('*', self._default_log_handler)
 
-	async def _default_log_handler(self, event: Event) -> str:
+	@staticmethod
+	async def _default_log_handler(event: BaseEvent) -> str:
 		"""Default handler that logs all events"""
 		logger.debug(f'Event processed: {event.event_type} [{event.event_id}] - {event.model_dump_json()}')
 		return 'logged'
@@ -70,49 +71,39 @@ class EventBus:
 			# Subscribe by string event type
 			self.handlers[str(event_pattern)].append(handler)
 
-	def _log_event(self, event: Event) -> Event:
+	def _log_event(self, event: BaseEvent) -> BaseEvent:
 		"""Log an event to the write-ahead log"""
 		self.write_ahead_log.append(event)
 		return event
 
-	async def enqueue(self, event: BaseModel) -> Event:
+	async def enqueue(self, event: BaseEvent) -> BaseEvent:
 		"""
 		Enqueue an event (non-blocking).
 		Returns the event object immediately with UUID but no results.
 		Can be awaited to get results when processing completes.
 		"""
-		# Cloud events inherit from Event, so just use them directly
-		if isinstance(event, Event):
-			actual_event = event
-		else:
-			# For other BaseModels, wrap in Event
-			event_data = event.model_dump()
-			actual_event = Event(data=event_data)
+		# For all events (BaseEvent subclasses or plain BaseModels), use them directly
+		actual_event = event
 
-		# Add this EventBus to the path if not already there
-		if self.name not in actual_event.path:
-			actual_event = actual_event.model_copy(update={'path': actual_event.path + [self.name]})
+		# Add this EventBus to the event_path if not already there
+		if self.name not in actual_event.event_path:
+			actual_event = actual_event.model_copy(update={'event_path': actual_event.event_path + [self.name]})
 
 		self._log_event(actual_event)
 		await self.event_queue.put(actual_event)
 		return actual_event
 
-	def enqueue_sync(self, event: BaseModel) -> Event:
+	def enqueue_sync(self, event: BaseEvent) -> BaseEvent:
 		"""
 		Enqueue an event from sync context (non-blocking).
 		Returns the event object immediately with UUID but no results.
 		"""
-		# Cloud events inherit from Event, so just use them directly
-		if isinstance(event, Event):
-			actual_event = event
-		else:
-			# For other BaseModels, wrap in Event
-			event_data = event.model_dump()
-			actual_event = Event(data=event_data)
+		# All events must inherit from BaseEvent
+		actual_event = event
 
-		# Add this EventBus to the path if not already there
-		if self.name not in actual_event.path:
-			actual_event = actual_event.model_copy(update={'path': actual_event.path + [self.name]})
+		# Add this EventBus to the event_path if not already there
+		if self.name not in actual_event.event_path:
+			actual_event = actual_event.model_copy(update={'event_path': actual_event.event_path + [self.name]})
 
 		self._log_event(actual_event)
 
@@ -127,7 +118,7 @@ class EventBus:
 
 		return actual_event
 
-	async def enqueue_and_wait(self, event: BaseModel) -> Event:
+	async def enqueue_and_wait(self, event: BaseEvent) -> BaseEvent:
 		"""
 		Enqueue an event and wait for all handlers to complete (blocking).
 		Returns the event object with results included.
@@ -136,7 +127,7 @@ class EventBus:
 		await event_obj.wait_for_completion()
 		return event_obj
 
-	def enqueue_and_wait_sync(self, event: BaseModel) -> Event:
+	def enqueue_and_wait_sync(self, event: BaseEvent) -> BaseEvent:
 		"""
 		Enqueue an event and wait for all handlers to complete from sync context (blocking).
 		Returns the event object with results included.
@@ -163,7 +154,7 @@ class EventBus:
 				# Some other error, re-raise
 				raise
 
-	async def enqueue_batch_and_wait(self, events: list[BaseModel]) -> list[Event]:
+	async def enqueue_batch_and_wait(self, events: list[BaseEvent]) -> list[BaseEvent]:
 		"""
 		Enqueue a list of events and wait for all of them to complete (blocking).
 		Events are processed in FIFO order but this method waits for all to finish.
@@ -183,7 +174,7 @@ class EventBus:
 
 		return event_objects
 
-	def enqueue_batch_and_wait_sync(self, events: list[BaseModel]) -> list[Event]:
+	def enqueue_batch_and_wait_sync(self, events: list[BaseModel]) -> list[BaseEvent]:
 		"""
 		Enqueue a list of events and wait for all of them to complete from sync context (blocking).
 		Events are processed in FIFO order but this method waits for all to finish.
@@ -213,7 +204,7 @@ class EventBus:
 				# Some other error, re-raise
 				raise
 
-	async def _execute_handlers(self, event: Event) -> None:
+	async def _execute_handlers(self, event: BaseEvent) -> None:
 		"""Execute all handlers for an event in parallel"""
 		# Get all applicable handlers
 		applicable_handlers = []
@@ -243,10 +234,10 @@ class EventBus:
 				result = await task
 				event.results[handler_name] = result
 			except Exception as e:
-				event.errors[handler_name] = e
+				event.errors[handler_name] = str(e)
 				logger.error(f'Handler {handler_name} failed for event {event.event_id}: {e}')
 
-	async def _safe_execute_handler(self, handler: EventHandler, event: Event) -> Any:
+	async def _safe_execute_handler(self, handler: EventHandler, event: BaseEvent) -> Any:
 		"""Safely execute a single handler"""
 		try:
 			if inspect.iscoroutinefunction(handler):
@@ -321,7 +312,7 @@ class EventBus:
 		"""Wait for all queued events to be processed"""
 		await self.event_queue.join()
 
-	def get_event_log(self) -> list[Event]:
+	def get_event_log(self) -> list[BaseEvent]:
 		"""Get the write-ahead log of all events"""
 		return self.write_ahead_log.copy()
 
@@ -335,9 +326,10 @@ class EventBus:
 		events_data = []
 
 		for event in self.write_ahead_log:
-			event_dict = event.model_dump()
+			# Use model_dump_with_metadata to include excluded fields
+			event_dict = event.model_dump_with_metadata()
 			# Convert datetime objects to ISO format strings
-			for key in ['timestamp', 'started_at', 'completed_at']:
+			for key in ['event_at', 'started_at', 'completed_at']:
 				if key in event_dict and event_dict[key]:
 					event_dict[key] = event_dict[key].isoformat()
 
@@ -361,9 +353,10 @@ class EventBus:
 		events_data = []
 
 		for event in self.write_ahead_log:
-			event_dict = event.model_dump()
+			# Use model_dump_with_metadata to include excluded fields
+			event_dict = event.model_dump_with_metadata()
 			# Convert datetime objects to ISO format strings
-			for key in ['timestamp', 'started_at', 'completed_at']:
+			for key in ['event_at', 'started_at', 'completed_at']:
 				if key in event_dict and event_dict[key]:
 					event_dict[key] = event_dict[key].isoformat()
 
@@ -377,19 +370,19 @@ class EventBus:
 			json.dump(events_data, f, indent=2, default=str)
 
 	# Convenience method that matches the old API
-	def emit(self, event: BaseModel) -> Event:
+	def emit(self, event: BaseEvent) -> BaseEvent:
 		"""Queue an event for processing. Can be called from sync or async context."""
 		return self.enqueue_sync(event)
 
-	def _would_create_loop(self, handler: EventHandler, event: Event) -> bool:
+	def _would_create_loop(self, handler: EventHandler, event: BaseEvent) -> bool:
 		"""Check if calling this handler would create a loop"""
 		# If handler is another EventBus.emit method
 		if hasattr(handler, '__self__') and isinstance(handler.__self__, EventBus):
 			target_bus = handler.__self__
-			return target_bus.name in event.path
+			return target_bus.name in event.event_path
 		return False
 
-	def fires_on_enter(self, event_type: str | type[Event], params: Callable | None = None):
+	def fires_on_enter(self, event_type: str | type[BaseEvent], params: Callable | None = None):
 		"""Decorator that fires an event when entering a function"""
 		from functools import wraps
 
@@ -397,7 +390,7 @@ class EventBus:
 			# Get the actual event class/type
 			if isinstance(event_type, str):
 				# String event type - will create generic Event
-				event_class = Event
+				raise ValueError("String event types are no longer supported")
 				type_name = event_type
 			else:
 				# Event subclass
@@ -416,13 +409,9 @@ class EventBus:
 					else:
 						event_params = params(self, *args, **kwargs)
 
-				# Create and emit event with origin as first path entry
-				if event_class == Event:
-					# Generic event with string type
-					event = Event(data={'event_type': type_name, **event_params}, path=[origin])
-				else:
-					# Specific event subclass
-					event = event_class(**event_params, path=[origin])
+				# Create and emit event with origin as first event_path entry
+				# Specific event subclass
+				event = event_class(**event_params, event_path=[origin])
 
 				self.event_bus.emit(event)
 
@@ -436,13 +425,9 @@ class EventBus:
 				if params:
 					event_params = params(self, *args, **kwargs)
 
-				# Create and emit event with origin as first path entry
-				if event_class == Event:
-					# Generic event with string type
-					event = Event(data={'event_type': type_name, **event_params}, path=[origin])
-				else:
-					# Specific event subclass
-					event = event_class(**event_params, path=[origin])
+				# Create and emit event with origin as first event_path entry
+				# Specific event subclass
+				event = event_class(**event_params, event_path=[origin])
 
 				self.event_bus.emit(event)
 
@@ -453,14 +438,14 @@ class EventBus:
 
 		return decorator
 
-	def fires_on_exit(self, event_type: str | type[Event], params: Callable | None = None):
+	def fires_on_exit(self, event_type: str | type[BaseEvent], params: Callable | None = None):
 		"""Decorator that fires an event when exiting a function (success or failure)"""
 		from functools import wraps
 
 		def decorator(func):
 			# Get the actual event class/type
 			if isinstance(event_type, str):
-				event_class = Event
+				raise ValueError("String event types are no longer supported")
 				type_name = event_type
 			else:
 				event_class = event_type
@@ -489,10 +474,8 @@ class EventBus:
 							event_params = params(self, result, *args, **kwargs)
 
 					# Create and emit event
-					if event_class == Event:
-						event = Event(data={'event_type': type_name, **event_params}, path=[origin])
-					else:
-						event = event_class(**event_params, path=[origin])
+					# Specific event subclass
+					event = event_class(**event_params, event_path=[origin])
 
 					self.event_bus.emit(event)
 
@@ -514,10 +497,8 @@ class EventBus:
 						event_params = params(self, result, *args, **kwargs)
 
 					# Create and emit event
-					if event_class == Event:
-						event = Event(data={'event_type': type_name, **event_params}, path=[origin])
-					else:
-						event = event_class(**event_params, path=[origin])
+					# Specific event subclass
+					event = event_class(**event_params, event_path=[origin])
 
 					self.event_bus.emit(event)
 
@@ -525,14 +506,14 @@ class EventBus:
 
 		return decorator
 
-	def fires_on_error(self, event_type: str | type[Event], params: Callable | None = None):
+	def fires_on_error(self, event_type: str | type[BaseEvent], params: Callable | None = None):
 		"""Decorator that fires an event only when a function raises an exception"""
 		from functools import wraps
 
 		def decorator(func):
 			# Get the actual event class/type
 			if isinstance(event_type, str):
-				event_class = Event
+				raise ValueError("String event types are no longer supported")
 				type_name = event_type
 			else:
 				event_class = event_type
@@ -555,10 +536,8 @@ class EventBus:
 							event_params = params(self, error, *args, **kwargs)
 
 					# Create and emit event
-					if event_class == Event:
-						event = Event(data={'event_type': type_name, 'error': str(error), **event_params}, path=[origin])
-					else:
-						event = event_class(**event_params, path=[origin])
+					# Specific event subclass
+					event = event_class(**event_params, event_path=[origin])
 
 					self.event_bus.emit(event)
 					raise
@@ -575,10 +554,8 @@ class EventBus:
 						event_params = params(self, error, *args, **kwargs)
 
 					# Create and emit event
-					if event_class == Event:
-						event = Event(data={'event_type': type_name, 'error': str(error), **event_params}, path=[origin])
-					else:
-						event = event_class(**event_params, path=[origin])
+					# Specific event subclass
+					event = event_class(**event_params, event_path=[origin])
 
 					self.event_bus.emit(event)
 					raise

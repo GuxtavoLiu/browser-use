@@ -2,8 +2,8 @@
 Example of using the EventBus with browser-use Agent.
 
 This example demonstrates:
-1. Setting up event handlers for cloud sync
-2. Tracking agent actions and performance
+1. Setting up event handlers for cloud sync events
+2. Tracking agent actions via cloud events
 3. Serializing events for analysis
 """
 
@@ -15,42 +15,51 @@ import anyio
 from langchain_openai import ChatOpenAI
 
 from browser_use import Agent
+from browser_use.event_bus import (
+	CreateAgentSessionEvent,
+	CreateAgentTaskEvent,
+	CreateAgentStepEvent,
+	CreateAgentOutputFileEvent,
+)
 
 
 # Example cloud sync handler
-async def cloud_sync_handler(event, agent):
-	"""Simulate syncing events to cloud backend"""
+async def cloud_sync_handler(event):
+	"""Handle cloud sync events"""
 	event_type = event.event_type
 
-	print(f'\n🌥️  Cloud Sync: {event_type}')
+	print(f'\n🌥️  Cloud Event: {event_type}')
 
-	if event_type == 'SessionStartedEvent':
-		print(f'   Session ID: {event.session_id}')
+	if event_type == 'CreateAgentSession':
+		print(f'   Session ID: {event.id}')
 		print(f'   User ID: {event.user_id}')
-		print(f'   Browser Type: {event.browser_type}')
+		print(f'   Browser Session ID: {event.browser_session_id}')
 		# In real implementation, would POST to cloud API
 		return {'cloud_id': 'cloud_session_123', 'synced': True}
 
-	elif event_type == 'TaskStartedEvent':
-		print(f'   Task: {event.task_description}')
-		print(f'   Session ID: {event.session_id}')
+	elif event_type == 'CreateAgentTask':
+		print(f'   Task: {event.task}')
+		print(f'   Agent Session ID: {event.agent_session_id}')
+		print(f'   LLM Model: {event.llm_model}')
 		return {'cloud_id': 'cloud_task_456', 'synced': True}
 
-	elif event_type == 'StepCreatedEvent':
+	elif event_type == 'CreateAgentStep':
 		print(f'   Step #{event.step}')
 		print(f'   Actions: {len(event.actions)}')
+		print(f'   Next Goal: {event.next_goal}')
 		return {'cloud_id': f'cloud_step_{event.step}', 'synced': True}
 
-	elif event_type == 'TaskCompletedEvent':
-		print(f'   Result: {event.result_summary[:50] if event.result_summary else "No output"}...')
-		return {'cloud_id': 'cloud_complete_789', 'synced': True}
+	elif event_type == 'CreateAgentOutputFile':
+		print(f'   File: {event.file_name}')
+		print(f'   Task ID: {event.task_id}')
+		return {'cloud_id': 'cloud_file_789', 'synced': True}
 
 	return {'synced': False}
 
 
 # Performance tracking handler
-async def performance_tracker(event, agent):
-	"""Track performance metrics"""
+async def performance_tracker(event):
+	"""Track performance metrics for events"""
 	if hasattr(event, 'started_at') and hasattr(event, 'completed_at'):
 		if event.started_at and event.completed_at:
 			duration = (event.completed_at - event.started_at).total_seconds()
@@ -65,20 +74,22 @@ async def main():
 		llm=ChatOpenAI(model='gpt-4o-mini'),
 	)
 
-	# Subscribe handlers to specific events
-	agent.event_bus.subscribe('SessionStartedEvent', cloud_sync_handler)
-	agent.event_bus.subscribe('TaskStartedEvent', cloud_sync_handler)
-	agent.event_bus.subscribe('StepCreatedEvent', cloud_sync_handler)
-	agent.event_bus.subscribe('TaskCompletedEvent', cloud_sync_handler)
+	# Subscribe handlers to specific event types
+	agent.event_bus.on(CreateAgentSessionEvent, cloud_sync_handler)
+	agent.event_bus.on(CreateAgentTaskEvent, cloud_sync_handler)
+	agent.event_bus.on(CreateAgentStepEvent, cloud_sync_handler)
+	agent.event_bus.on(CreateAgentOutputFileEvent, cloud_sync_handler)
 
 	# Subscribe performance tracker to all events
-	agent.event_bus.subscribe_to_all(performance_tracker)
+	agent.event_bus.on('*', performance_tracker)
 
-	# You can also use the decorator pattern
-	@agent.event_bus.decorator('SessionStoppedEvent')
-	async def on_session_stopped(event, agent):
-		print('\n🛑 Session stopped, saving event log...')
+	# You can also subscribe by event type name
+	async def on_step_created(event):
+		if event.event_type == 'CreateAgentStep':
+			print(f'\n🔍 Step {event.step} created at URL: {event.url}')
 		return 'handled'
+	
+	agent.event_bus.on('CreateAgentStep', on_step_created)
 
 	try:
 		# Run the agent
@@ -115,13 +126,14 @@ async def main():
 			saved_events = json.loads(content)
 
 		# Find all step events
-		step_events = [e for e in saved_events if e['event_type'] == 'StepCreatedEvent']
+		step_events = [e for e in saved_events if e['event_type'] == 'CreateAgentStep']
 		print(f'\n🔍 Found {len(step_events)} step events')
 
 		for i, step in enumerate(step_events):
 			print(f'\n   Step {i + 1}:')
 			print(f'   - URL: {step.get("url", "N/A")}')
-			print(f'   - Actions: {step.get("actions", [])}')
+			print(f'   - Next Goal: {step.get("next_goal", "N/A")}')
+			print(f'   - Memory: {step.get("memory", "N/A")[:100]}...')
 
 			# Check if this step was synced to cloud
 			if 'cloud_sync_handler' in step.get('results', {}):
