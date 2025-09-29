@@ -68,6 +68,7 @@ from browser_use.tools.service import Tools
 from browser_use.utils import (
 	URL_PATTERN,
 	_log_pretty_path,
+	check_latest_browser_use_version,
 	get_browser_use_version,
 	get_git_info,
 	time_execution_async,
@@ -175,7 +176,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		display_files_in_done_text: bool = True,
 		include_tool_call_examples: bool = False,
 		vision_detail_level: Literal['auto', 'low', 'high'] = 'auto',
-		llm_timeout: int = 90,
+		llm_timeout: int | None = None,
 		step_timeout: int = 120,
 		directly_open_url: bool = True,
 		include_recent_events: bool = False,
@@ -205,6 +206,23 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			page_extraction_llm = llm
 		if available_file_paths is None:
 			available_file_paths = []
+
+		# Set timeout based on model name if not explicitly provided
+		if llm_timeout is None:
+
+			def _get_model_timeout(llm_model: BaseChatModel) -> int:
+				"""Determine timeout based on model name"""
+				model_name = getattr(llm_model, 'model', '').lower()
+				if 'gemini' in model_name:
+					return 45
+				elif 'groq' in model_name:
+					return 30
+				elif 'o3' in model_name or 'claude' in model_name or 'sonnet' in model_name or 'deepseek' in model_name:
+					return 90
+				else:
+					return 60  # Default timeout
+
+			llm_timeout = _get_model_timeout(llm)
 
 		self.id = task_id or uuid7str()
 		self.task_id: str = self.id
@@ -606,7 +624,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self._message_manager.add_new_task(new_task)
 		# Mark as follow-up task and recreate eventbus (gets shut down after each run)
 		self.state.follow_up_task = True
-		self.eventbus = EventBus(name=f'Agent_{str(self.id)[-self.state.n_steps :]}')
+		agent_id_suffix = str(self.id)[-4:].replace('-', '_')
+		if agent_id_suffix and agent_id_suffix[0].isdigit():
+			agent_id_suffix = 'a' + agent_id_suffix
+		self.eventbus = EventBus(name=f'Agent_{agent_id_suffix}')
 
 		# Re-register cloud sync handler if it exists (if not disabled)
 		if hasattr(self, 'cloud_sync') and self.cloud_sync and self.enable_cloud_sync:
@@ -663,7 +684,6 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# Always take screenshots for all steps
 		self.logger.debug('📸 Requesting browser state with include_screenshot=True')
 		browser_state_summary = await self.browser_session.get_browser_state_summary(
-			cache_clickable_elements_hashes=True,
 			include_screenshot=True,  # always capture even if use_vision=False so that cloud sync is useful (it's fast now anyway)
 			include_recent_events=self.include_recent_events,
 		)
@@ -687,6 +707,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Page-specific actions will be included directly in the browser_state message
 		self.logger.debug(f'💬 Step {self.state.n_steps}: Creating state messages for context...')
+
 		self._message_manager.create_state_messages(
 			browser_state_summary=browser_state_summary,
 			model_output=self.state.last_model_output,
@@ -1175,12 +1196,19 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# Just re-raise - Pydantic's validation errors are already descriptive
 			raise
 
-	def _log_agent_run(self) -> None:
+	async def _log_agent_run(self) -> None:
 		"""Log the agent run"""
 		# Blue color for task
 		self.logger.info(f'\033[34m🚀 Task: {self.task}\033[0m')
 
 		self.logger.debug(f'🤖 Browser-Use Library Version {self.version} ({self.source})')
+
+		# Check for latest version and log upgrade message if needed
+		latest_version = await check_latest_browser_use_version()
+		if latest_version and latest_version != self.version:
+			self.logger.info(
+				f'📦 Newer version available: {latest_version} (current: {self.version}). Upgrade with: uv add browser-use@{latest_version}'
+			)
 
 	def _log_first_step_startup(self) -> None:
 		"""Log startup message only on the first step"""
@@ -1406,7 +1434,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		signal_handler.register()
 
 		try:
-			self._log_agent_run()
+			await self._log_agent_run()
 
 			self.logger.debug(
 				f'🔧 Agent setup: Agent Session ID {self.session_id[-4:]}, Task ID {self.task_id[-4:]}, Browser Session ID {self.browser_session.id[-4:] if self.browser_session else "None"} {"(connecting via CDP)" if (self.browser_session and self.browser_session.cdp_url) else "(launching local browser)"}'
@@ -1434,23 +1462,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				self.eventbus.dispatch(CreateAgentTaskEvent.from_agent(self))
 
 			# Start browser session and attach watchdogs
-			assert self.browser_session is not None, 'Browser session must be initialized before starting'
-			self.logger.debug('🌐 Starting browser session...')
-
-			from browser_use.browser.events import BrowserStartEvent
-
-			event = self.browser_session.event_bus.dispatch(BrowserStartEvent())
-			await event
-			# Check if browser startup actually succeeded by getting the result
-			await event.event_result(raise_if_any=True, raise_if_none=False)
-
-			self.logger.debug('🔧 Browser session started with watchdogs attached')
-
-			# Ensure browser focus is properly established before executing initial actions
-			if self.browser_session and self.browser_session.agent_focus:
-				self.logger.debug(f'🎯 Browser focus established on target: {self.browser_session.agent_focus.target_id[-4:]}')
-			else:
-				self.logger.warning('⚠️ No browser focus established, may cause navigation issues')
+			await self.browser_session.start()
 
 			await self._execute_initial_actions()
 			# Log startup message on first step (only if we haven't already done steps)
@@ -1641,8 +1653,6 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			cached_selector_map = {}
 			cached_element_hashes = set()
 
-		# await self.browser_session.remove_highlights()
-
 		for i, action in enumerate(actions):
 			if i > 0:
 				# ONLY ALLOW TO CALL `done` IF IT IS A SINGLE ACTION
@@ -1655,7 +1665,6 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# This prevents stale element detection but doesn't refresh before execution
 			if action.get_index() is not None and i != 0:
 				new_browser_state_summary = await self.browser_session.get_browser_state_summary(
-					cache_clickable_elements_hashes=False,
 					include_screenshot=False,
 				)
 				new_selector_map = new_browser_state_summary.dom_state.selector_map
@@ -1727,7 +1736,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				).replace('{', '').replace('}', '').replace("'", '').strip().strip(',')
 				# Ensure action_params is always a string before checking length
 				action_params = str(action_params)
-				action_params = f'{action_params[:122]}...' if len(action_params) > 128 else action_params
+				action_params = f'{action_params[:522]}...' if len(action_params) > 528 else action_params
 				time_start = time.time()
 				self.logger.info(f'  🦾 {blue}[ACTION {i + 1}/{total_actions}]{reset} {action_params}')
 
@@ -1788,23 +1797,26 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		Returns:
 		                List of action results
 		"""
-		# Execute initial actions if provided
-		if self.initial_actions:
-			result = await self.multi_act(self.initial_actions)
-			self.state.last_result = result
+		# Skip cloud sync session events for rerunning (we're replaying, not starting new)
+		self.state.session_initialized = True
+
+		# Initialize browser session
+		await self.browser_session.start()
 
 		results = []
 
 		for i, history_item in enumerate(history.history):
 			goal = history_item.model_output.current_state.next_goal if history_item.model_output else ''
-			self.logger.info(f'Replaying step {i + 1}/{len(history.history)}: goal: {goal}')
+			step_num = history_item.metadata.step_number if history_item.metadata else i
+			step_name = 'Initial actions' if step_num == 0 else f'Step {step_num}'
+			self.logger.info(f'Replaying {step_name} ({i + 1}/{len(history.history)}): {goal}')
 
 			if (
 				not history_item.model_output
 				or not history_item.model_output.action
 				or history_item.model_output.action == [None]
 			):
-				self.logger.warning(f'Step {i + 1}: No action to replay, skipping')
+				self.logger.warning(f'{step_name}: No action to replay, skipping')
 				results.append(ActionResult(error='No action to replay'))
 				continue
 
@@ -1818,15 +1830,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				except Exception as e:
 					retry_count += 1
 					if retry_count == max_retries:
-						error_msg = f'Step {i + 1} failed after {max_retries} attempts: {str(e)}'
+						error_msg = f'{step_name} failed after {max_retries} attempts: {str(e)}'
 						self.logger.error(error_msg)
 						if not skip_failures:
 							results.append(ActionResult(error=error_msg))
 							raise RuntimeError(error_msg)
 					else:
-						self.logger.warning(f'Step {i + 1} failed (attempt {retry_count}/{max_retries}), retrying...')
+						self.logger.warning(f'{step_name} failed (attempt {retry_count}/{max_retries}), retrying...')
 						await asyncio.sleep(delay_between_actions)
 
+		await self.close()
 		return results
 
 	async def _execute_initial_actions(self) -> None:
@@ -1838,14 +1851,46 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			if result and self.initial_url and result[0].long_term_memory:
 				result[0].long_term_memory = f'Found initial url and automatically loaded it. {result[0].long_term_memory}'
 			self.state.last_result = result
+
+			# Save initial actions to history as step 0 for rerun capability
+			# Skip browser state capture for initial actions (usually just URL navigation)
+			model_output = self.AgentOutput(
+				evaluation_previous_goal='Starting agent with initial actions',
+				memory='',
+				next_goal='Execute initial navigation or setup actions',
+				action=self.initial_actions,
+			)
+
+			metadata = StepMetadata(
+				step_number=0,
+				step_start_time=time.time(),
+				step_end_time=time.time(),
+			)
+
+			# Create minimal browser state history for initial actions
+			state_history = BrowserStateHistory(
+				url=self.initial_url or '',
+				title='Initial Actions',
+				tabs=[],
+				interacted_element=[None] * len(self.initial_actions),  # No DOM elements needed
+				screenshot_path=None,
+			)
+
+			history_item = AgentHistory(
+				model_output=model_output,
+				result=result,
+				state=state_history,
+				metadata=metadata,
+			)
+
+			self.history.add_item(history_item)
+			self.logger.debug('📝 Saved initial actions to history as step 0')
 			self.logger.debug('Initial actions completed')
 
 	async def _execute_history_step(self, history_item: AgentHistory, delay: float) -> list[ActionResult]:
 		"""Execute a single step from history with element validation"""
 		assert self.browser_session is not None, 'BrowserSession is not set up'
-		state = await self.browser_session.get_browser_state_summary(
-			cache_clickable_elements_hashes=False, include_screenshot=False
-		)
+		state = await self.browser_session.get_browser_state_summary(include_screenshot=False)
 		if not state or not history_item.model_output:
 			raise ValueError('Invalid state or model output')
 		updated_actions = []
@@ -1913,10 +1958,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		return await self.rerun_history(history, **kwargs)
 
 	def save_history(self, file_path: str | Path | None = None) -> None:
-		"""Save the history to a file"""
+		"""Save the history to a file with sensitive data filtering"""
 		if not file_path:
 			file_path = 'AgentHistory.json'
-		self.history.save_to_file(file_path)
+		self.history.save_to_file(file_path, sensitive_data=self.sensitive_data)
 
 	def pause(self) -> None:
 		"""Pause the agent before the next step"""
@@ -2103,7 +2148,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# AgentHistoryList methods
 				'structured_output': structured_output_json,
 				'final_result_response': final_result,
-				'complete_history': _get_complete_history_without_screenshots(self.history.model_dump()),
+				'complete_history': _get_complete_history_without_screenshots(
+					self.history.model_dump(sensitive_data=self.sensitive_data)
+				),
 			},
 		}
 
